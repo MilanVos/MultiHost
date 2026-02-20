@@ -10,6 +10,7 @@ public class DiscordBotService
     private readonly DiscordSocketClient _client;
     private IAudioClient? _audioClient;
     private ulong? _currentVoiceChannelId;
+    private TaskCompletionSource<bool>? _readyTaskSource;
 
     public event EventHandler<Participant>? UserJoinedVoice;
     public event EventHandler<ulong>? UserLeftVoice;
@@ -41,13 +42,36 @@ public class DiscordBotService
     private Task OnReady()
     {
         BotStatusChanged?.Invoke(this, "Bot is ready");
+        _readyTaskSource?.TrySetResult(true);
         return Task.CompletedTask;
     }
 
-    public async Task StartAsync(string token)
+    public async Task StartAsync(string token, int timeoutSeconds = 30)
     {
-        await _client.LoginAsync(TokenType.Bot, token);
-        await _client.StartAsync();
+        _readyTaskSource = new TaskCompletionSource<bool>();
+
+        try
+        {
+            await _client.LoginAsync(TokenType.Bot, token);
+            await _client.StartAsync();
+
+            var readyTask = _readyTaskSource.Task;
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds));
+
+            var completedTask = await Task.WhenAny(readyTask, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                throw new TimeoutException($"Bot failed to connect within {timeoutSeconds} seconds. Please check your token and internet connection.");
+            }
+
+            await readyTask;
+        }
+        catch (Exception ex)
+        {
+            _readyTaskSource = null;
+            throw new Exception($"Failed to start bot: {ex.Message}", ex);
+        }
     }
 
     public async Task StopAsync()
@@ -68,30 +92,67 @@ public class DiscordBotService
         {
             if (_audioClient != null && _currentVoiceChannelId == channelId)
             {
+                BotStatusChanged?.Invoke(this, "Already connected to this voice channel");
                 return true;
             }
 
             if (_audioClient != null)
             {
+                BotStatusChanged?.Invoke(this, "Disconnecting from current voice channel...");
                 _audioClient.Dispose();
                 _audioClient = null;
             }
 
             var guild = _client.GetGuild(guildId);
-            if (guild == null) return false;
+            if (guild == null)
+            {
+                BotStatusChanged?.Invoke(this, $"Error: Guild {guildId} not found");
+                return false;
+            }
 
             var voiceChannel = guild.GetVoiceChannel(channelId);
-            if (voiceChannel == null) return false;
+            if (voiceChannel == null)
+            {
+                BotStatusChanged?.Invoke(this, $"Error: Voice channel {channelId} not found in guild {guild.Name}");
+                return false;
+            }
+
+            BotStatusChanged?.Invoke(this, $"Connecting to voice channel: {voiceChannel.Name}...");
+
+            var botUser = guild.CurrentUser;
+            var permissions = botUser.GetPermissions(voiceChannel);
+
+            if (!permissions.Connect)
+            {
+                BotStatusChanged?.Invoke(this, $"Error: Bot lacks 'Connect' permission in {voiceChannel.Name}");
+                return false;
+            }
+
+            if (!permissions.Speak)
+            {
+                BotStatusChanged?.Invoke(this, $"Warning: Bot lacks 'Speak' permission in {voiceChannel.Name}");
+            }
 
             _audioClient = await voiceChannel.ConnectAsync();
             _currentVoiceChannelId = channelId;
 
-            BotStatusChanged?.Invoke(this, $"Connected to {voiceChannel.Name}");
+            BotStatusChanged?.Invoke(this, $"✓ Connected to {voiceChannel.Name}");
             return true;
+        }
+        catch (Discord.Net.HttpException httpEx)
+        {
+            BotStatusChanged?.Invoke(this, $"HTTP Error joining voice: {httpEx.Reason} (Code: {httpEx.HttpCode})");
+            return false;
+        }
+        catch (TimeoutException)
+        {
+            BotStatusChanged?.Invoke(this, "Timeout connecting to voice channel. Discord may be slow or unavailable.");
+            return false;
         }
         catch (Exception ex)
         {
-            BotStatusChanged?.Invoke(this, $"Error joining voice: {ex.Message}");
+            BotStatusChanged?.Invoke(this, $"Error joining voice: {ex.GetType().Name} - {ex.Message}");
+            Console.WriteLine($"Full exception: {ex}");
             return false;
         }
     }

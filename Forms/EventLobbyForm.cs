@@ -175,6 +175,58 @@ public partial class EventLobbyForm : Form
                 _statusLabel.Text = $"Status: {status}";
             }
         };
+
+        // Skip voice check at startup - will check when actually needed
+        _statusLabel.Text = "Status: Ready (voice check deferred)";
+    }
+
+    private void CheckVoiceSupport()
+    {
+        try
+        {
+            var (success, message) = VoiceDiagnostics.CheckVoiceSupport();
+            
+            if (!success)
+            {
+                _statusLabel.Text = "Status: Voice libraries issue (see popup)";
+                var result = MessageBox.Show(
+                    message + "\n\nDo you want to continue anyway?\n\n" +
+                    "Note: Voice channel features may not work, but you can still use other features.",
+                    "Voice Support Issue",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                
+                if (result == DialogResult.Yes)
+                {
+                    _statusLabel.Text = "Status: Running without voice support";
+                }
+            }
+            else
+            {
+                _statusLabel.Text = "Status: Voice support ready";
+            }
+        }
+        catch (BadImageFormatException)
+        {
+            _statusLabel.Text = "Status: Voice DLLs have wrong architecture";
+            MessageBox.Show(
+                "Voice libraries were found but have the wrong architecture (32-bit vs 64-bit).\n\n" +
+                "This is a known issue with Discord.Net voice on some systems.\n\n" +
+                "WORKAROUND:\n" +
+                "The application will work, but voice channel joining may fail.\n\n" +
+                "You can still:\n" +
+                "• Connect the bot to Discord\n" +
+                "• View servers and channels\n" +
+                "• Test other features\n\n" +
+                "For full voice support, you may need to run on a different system or use an alternative approach.",
+                "Voice Architecture Mismatch",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = $"Status: Voice check error - {ex.Message}";
+        }
     }
 
     private async Task ConnectBot()
@@ -190,8 +242,7 @@ public partial class EventLobbyForm : Form
 
         try
         {
-            await _botService.StartAsync(_botTokenTextBox.Text);
-            await Task.Delay(3000);
+            await _botService.StartAsync(_botTokenTextBox.Text, timeoutSeconds: 30);
 
             var guilds = _botService.GetGuilds();
             _guildComboBox.Items.Clear();
@@ -245,6 +296,22 @@ public partial class EventLobbyForm : Form
         _startEventButton.Enabled = false;
         _statusLabel.Text = "Status: Starting event...";
 
+        string? lastBotStatus = null;
+        EventHandler<string>? statusHandler = (s, status) =>
+        {
+            lastBotStatus = status;
+            if (InvokeRequired)
+            {
+                Invoke(() => _statusLabel.Text = $"Status: {status}");
+            }
+            else
+            {
+                _statusLabel.Text = $"Status: {status}";
+            }
+        };
+
+        _botService.BotStatusChanged += statusHandler;
+
         try
         {
             var currentUser = _botService.GetGuilds().First().CurrentUser;
@@ -270,16 +337,32 @@ public partial class EventLobbyForm : Form
             }
             else
             {
-                MessageBox.Show("Failed to start event. Could not join voice channel.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                var detailedError = lastBotStatus ?? "Unknown error";
+                
+                MessageBox.Show(
+                    $"Failed to start event. Could not join voice channel.\n\n" +
+                    $"Error Details:\n{detailedError}\n\n" +
+                    "Common causes:\n" +
+                    "• Bot lacks 'Connect' permission in the voice channel\n" +
+                    "• Voice channel is full\n" +
+                    "• Native libraries (libsodium, opus) not installed\n" +
+                    "• Discord voice servers are unavailable\n\n" +
+                    "See VOICE_SETUP.md for detailed troubleshooting.",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
                 _startEventButton.Enabled = true;
-                _statusLabel.Text = "Status: Failed to start event";
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Error starting event: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show($"Error starting event: {ex.Message}\n\n{ex.GetType().Name}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             _startEventButton.Enabled = true;
             _statusLabel.Text = $"Status: Error - {ex.Message}";
+        }
+        finally
+        {
+            _botService.BotStatusChanged -= statusHandler;
         }
     }
 }

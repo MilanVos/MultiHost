@@ -185,6 +185,15 @@ Moderator   → Basic moderation (mute/unmute/deaf/disconnect)
 
 ## Troubleshooting
 
+### ⚠️ "Failed to start event. Could not join voice channel"
+
+This is the most common issue! **See [VOICE_SETUP.md](./VOICE_SETUP.md) for detailed solutions.**
+
+**Quick fixes**:
+1. **Check permissions**: Bot needs "Connect" permission in the voice channel
+2. **Watch the status label**: It shows detailed error messages
+3. **Native libraries**: Voice requires libsodium and opus libraries (may need manual install)
+
 ### Bot won't connect
 - ✅ Verify your bot token is correct
 - ✅ Check that the bot has the required privileged intents enabled
@@ -203,6 +212,11 @@ Moderator   → Basic moderation (mute/unmute/deaf/disconnect)
 ### Lock conflicts
 - Locks automatically expire after 10 seconds
 - If a participant appears permanently locked, refresh by ending and restarting the event
+
+### Native library errors (libsodium, opus)
+- See [VOICE_SETUP.md](./VOICE_SETUP.md) for installation instructions
+- These are required for voice channel connections
+- Error messages will appear in the status label
 
 ## Dependencies
 
